@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hemorrhage-hitl"
+version = "0.1.0"
+description = "Protocol-first hemorrhage HITL segmentation pipeline."
+readme = "plans/Hemorrhage Segmentation.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.0",
+  "PyYAML>=6.0",
+  "nibabel>=5.2",
+  "scipy>=1.14",
+  "torch>=2.6",
+  "typing-extensions>=4.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+]
+
+[project.scripts]
+hemorrhage = "hemorrhage.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

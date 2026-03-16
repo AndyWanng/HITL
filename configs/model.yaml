@@ -1,0 +1,47 @@
+model:
+  in_channels: 1
+  out_channels: 1
+  stage_channels: [32, 64, 96, 160, 256, 320]
+  blocks_per_stage: 2
+  dropout_bottleneck: 0.1
+  norm: instance
+  activation: leaky_relu
+preprocessing:
+  clip_percentiles: [0.5, 99.5]
+  enforce_geometry_match: true
+  affine_tolerance: 1.0e-4
+  spacing_tolerance: 1.0e-4
+training:
+  patch_size: [128, 96, 64]
+  batch_size: 2
+  num_workers: 0
+  patches_per_case: 2
+  positive_patch_probability: 0.5
+  amp: true
+  validation:
+    enabled: true
+    fraction: 0.125
+    min_cases: 1
+    selection_metric: macro_dice_postprocessed
+  round0:
+    epochs: 200
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+  finetune:
+    epochs: 10
+    lr: 2.0e-5
+    weight_decay: 1.0e-4
+augmentation:
+  flip_axes: [0, 1]
+  intensity_scale_range: [0.9, 1.1]
+  intensity_shift_range: [-0.1, 0.1]
+  gaussian_noise_std: 0.01
+inference:
+  sw_batch_size: 1
+  overlap: 0.5
+  threshold: 0.5
+postprocessing:
+  threshold: 0.5
+  min_component_voxels: 16
+  keep_largest_component: false
+  save_binary_masks: true

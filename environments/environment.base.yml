@@ -1,0 +1,13 @@
+name: hemorrhage-hitl
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pyyaml
+  - nibabel
+  - scipy
+  - pip:
+      - -e ..

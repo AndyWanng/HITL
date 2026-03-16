@@ -1,0 +1,45 @@
+seed: 20260315
+alpha: 0.15
+folds: 5
+min_nominal_budget: 5
+routine_audit_ratio:
+  routine: 2
+  audit: 1
+tta_modes:
+  - identity
+  - flip_x
+  - flip_y
+  - flip_xy
+uncertainty:
+  high_threshold: 0.5
+selection:
+  top_voxel_fraction: 0.01
+  top_voxel_min: 100
+  benefit_disagreement_weight: 0.70
+  benefit_uncertainty_weight: 0.30
+  routine_repeat_penalty: 0.5
+  review_cost:
+    positive_voxel_weight: 2.0
+    positive_slice_weight: 1.0
+    connected_component_weight: 1.0
+    base_bias: 1.0
+    max_connected_components: 20
+stop:
+  tau_routine: 0.03
+  tau_audit: 0.015
+  tau_delta: 0.005
+  tau_anchor_stability: 0.97
+  patience_non_empty_rounds: 3
+review:
+  routine_reentry_delay: 2
+  audit_reentry:
+    high_dice: 0.95
+    medium_dice: 0.90
+    delay_high: 3
+    delay_medium: 2
+    delay_low: 1
+loss:
+  case_weight_reviewed: 2.0
+  case_weight_unreviewed: 1.0
+  voxel_weight_floor: 0.5
+

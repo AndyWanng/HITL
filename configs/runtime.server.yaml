@@ -1,0 +1,8 @@
+paths:
+  data_root: data
+  workspace_root: workspace
+runtime:
+  device: cuda
+  allow_cpu_fallback: false
+  smoke_mode: false
+
