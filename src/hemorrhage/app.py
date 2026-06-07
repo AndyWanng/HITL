@@ -17,6 +17,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-project")
     sub.add_parser("train-round0")
 
+    status = sub.add_parser("status")
+    status.add_argument("--round", type=int, dest="round_index")
+
     plan_round = sub.add_parser("plan-round")
     plan_round.add_argument("--round", type=int, required=True, dest="round_index")
     plan_round.add_argument("--budget", type=int, required=True)
@@ -43,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     finalize_round = sub.add_parser("finalize-round")
     finalize_round.add_argument("--round", type=int, required=True, dest="round_index")
+
+    diagnose_revision = sub.add_parser("diagnose-revision-policy")
+    diagnose_revision.add_argument("--round", type=int, required=True, dest="round_index")
 
     report_round = sub.add_parser("report-round")
     report_round.add_argument("--round", type=int, required=True, dest="round_index")
@@ -74,6 +80,8 @@ def main() -> None:
         pipeline.init_project()
     elif args.command == "train-round0":
         pipeline.train_round0()
+    elif args.command == "status":
+        print(pipeline.status(round_index=args.round_index))
     elif args.command == "plan-round":
         pipeline.plan_round(round_index=args.round_index, budget=args.budget)
     elif args.command == "import-routine":
@@ -88,6 +96,8 @@ def main() -> None:
         pipeline.import_phase2(round_index=args.round_index, input_dir=Path(args.input_dir))
     elif args.command == "finalize-round":
         pipeline.finalize_round(round_index=args.round_index)
+    elif args.command == "diagnose-revision-policy":
+        pipeline.diagnose_revision_policy(round_index=args.round_index)
     elif args.command == "report-round":
         pipeline.report_round(round_index=args.round_index)
     elif args.command == "predict-external":

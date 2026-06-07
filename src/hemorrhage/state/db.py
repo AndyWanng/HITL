@@ -84,6 +84,7 @@ class StateStore:
                     audit_anchor_label_path TEXT,
                     audit_final_label_path TEXT,
                     edit_ratio REAL,
+                    whole_volume_edit_ratio REAL,
                     modified_slices_count REAL,
                     anchor_assisted_dice REAL,
                     review_time REAL,
@@ -135,6 +136,7 @@ class StateStore:
                 """
             )
             self._ensure_column(conn, "rounds", "progress_json", "TEXT")
+            self._ensure_column(conn, "review_stats", "whole_volume_edit_ratio", "REAL")
 
     def _ensure_column(self, conn: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -314,15 +316,16 @@ class StateStore:
                 INSERT INTO review_stats (
                     round_index, case_id, role,
                     routine_final_label_path, audit_anchor_label_path, audit_final_label_path,
-                    edit_ratio, modified_slices_count, anchor_assisted_dice,
+                    edit_ratio, whole_volume_edit_ratio, modified_slices_count, anchor_assisted_dice,
                     review_time, anchor_time, assisted_time, warnings_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(round_index, case_id) DO UPDATE SET
                     role=excluded.role,
                     routine_final_label_path=excluded.routine_final_label_path,
                     audit_anchor_label_path=excluded.audit_anchor_label_path,
                     audit_final_label_path=excluded.audit_final_label_path,
                     edit_ratio=excluded.edit_ratio,
+                    whole_volume_edit_ratio=excluded.whole_volume_edit_ratio,
                     modified_slices_count=excluded.modified_slices_count,
                     anchor_assisted_dice=excluded.anchor_assisted_dice,
                     review_time=excluded.review_time,
@@ -338,6 +341,7 @@ class StateStore:
                     record.get("audit_anchor_label_path"),
                     record.get("audit_final_label_path"),
                     record.get("edit_ratio"),
+                    record.get("whole_volume_edit_ratio"),
                     record.get("modified_slices_count"),
                     record.get("anchor_assisted_dice"),
                     record.get("review_time"),

@@ -53,6 +53,38 @@ runtime:
 
 All commands below assume you are in the project root.
 
+### Progress And Status
+
+You can inspect overall progress at any time:
+
+```bash
+hemorrhage --runtime-config configs/runtime.server.yaml status
+```
+
+To inspect one specific round:
+
+```bash
+hemorrhage --runtime-config configs/runtime.server.yaml status --round 1
+```
+
+The overview shows:
+
+- each known round
+- current round status
+- budget
+- review import progress
+- checkpoint count
+- report file availability
+
+The single-round view also shows:
+
+- routine/audit set sizes
+- import completion flags
+- review stats row count and warning count
+- report/checkpoint availability
+- OOF Dice summary when available
+- stop state when available
+
 ### Step 1. Initialize the project
 
 ```bash

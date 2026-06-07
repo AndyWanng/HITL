@@ -1,0 +1,8 @@
+paths:
+  data_root: data
+  workspace_root: workspace_round1_correction_20260429_161018
+runtime:
+  device: cuda
+  allow_cpu_fallback: false
+  smoke_mode: false
+

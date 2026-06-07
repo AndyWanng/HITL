@@ -24,7 +24,7 @@ def soft_dice_score(pred: np.ndarray, target: np.ndarray, eps: float = 1.0e-6) -
 
 
 def binary_entropy(p: np.ndarray) -> np.ndarray:
-    clipped = np.clip(p, 1.0e-8, 1.0 - 1.0e-8)
+    clipped = np.clip(np.asarray(p, dtype=np.float64), 1.0e-7, 1.0 - 1.0e-7)
     return (-clipped * np.log(clipped) - (1.0 - clipped) * np.log(1.0 - clipped)) / log(2)
 
 
@@ -63,4 +63,3 @@ def edit_ratio(current_mask: np.ndarray, previous_mask: np.ndarray) -> float:
     numerator = np.abs(current_mask.astype(np.int16) - previous_mask.astype(np.int16)).sum()
     denominator = np.logical_or(current_mask.astype(bool), previous_mask.astype(bool)).sum()
     return float(numerator / (denominator + 1.0e-6))
-

@@ -57,6 +57,10 @@ class Custom3DUNetBackend:
         self.validation_min_cases = int(self.validation_cfg.get("min_cases", 1))
         self.validation_metric = str(self.validation_cfg.get("selection_metric", "macro_dice_postprocessed"))
         self.postprocess_cfg = dict(config.model.postprocessing)
+        self.alignment_cfg = dict(training_cfg.get("alignment", {}))
+        self.alignment_enabled = bool(self.alignment_cfg.get("enabled", False))
+        self.alignment_freeze_encoder_epochs = int(self.alignment_cfg.get("freeze_encoder_epochs", 0)) if self.alignment_enabled else 0
+        self.alignment_train_backbone = bool(self.alignment_cfg.get("train_backbone", True))
 
     def build_model(self) -> nn.Module:
         return ResidualUNet3D(
@@ -85,12 +89,30 @@ class Custom3DUNetBackend:
                     target=case["target"].astype(np.float32),
                     voxel_weight=case["voxel_weight"].astype(np.float32),
                     case_weight=float(case["case_weight"]),
+                    alignment_core_mask=case.get("alignment_core_mask"),
+                    alignment_core_target=case.get("alignment_core_target"),
+                    alignment_core_weight=case.get("alignment_core_weight"),
+                    alignment_sampling_mask=case.get("alignment_sampling_mask"),
+                    alignment_teacher=case.get("alignment_teacher"),
+                    alignment_trust_weight=case.get("alignment_trust_weight"),
                 )
             )
         return prepared
 
     def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         return percentile_zscore(image.astype(np.float32), *self.clip_percentiles)
+
+    def _set_encoder_trainable(self, model: nn.Module, trainable: bool) -> None:
+        for module in (model.stem, model.encoders):
+            for parameter in module.parameters():
+                parameter.requires_grad = trainable
+
+    def _set_backbone_trainable(self, model: nn.Module, trainable: bool) -> None:
+        for module in (model.stem, model.encoders, model.decoders):
+            for parameter in module.parameters():
+                parameter.requires_grad = trainable
+        for parameter in model.head.parameters():
+            parameter.requires_grad = True
 
     def train_fold(
         self,
@@ -111,6 +133,7 @@ class Custom3DUNetBackend:
             model.load_state_dict(payload["model"])
         train_split, val_split = self._split_train_val_cases(train_cases, fold_id)
         prepared = self.prepare_round_data(train_split)
+        active_alignment = self.alignment_enabled and not round0
         dataset = RoundPatchDataset(
             prepared,
             patch_size=self.patch_size,
@@ -118,6 +141,10 @@ class Custom3DUNetBackend:
             positive_patch_probability=self.positive_patch_probability,
             seed=self.config.protocol.seed + round_index * 31 + fold_id,
             augmentation_cfg=self.augmentation_cfg,
+            alignment_core_patch_probability=float(self.alignment_cfg.get("core_patch_probability", 0.0)) if active_alignment else 0.0,
+            reviewed_positive_patch_probability=float(self.alignment_cfg.get("reviewed_positive_patch_probability", self.positive_patch_probability))
+            if active_alignment
+            else None,
         )
         loader = DataLoader(
             dataset,
@@ -186,6 +213,10 @@ class Custom3DUNetBackend:
 
         model.train()
         for epoch in range(1, epochs + 1):
+            if active_alignment and not self.alignment_train_backbone:
+                self._set_backbone_trainable(model, False)
+            elif active_alignment and self.alignment_freeze_encoder_epochs > 0:
+                self._set_encoder_trainable(model, epoch > self.alignment_freeze_encoder_epochs)
             running = []
             step_idx = 0
             for step_idx, batch in enumerate(loader, start=1):
@@ -196,7 +227,25 @@ class Custom3DUNetBackend:
                 optimizer.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=device.type == "cuda" and self.use_amp):
                     logits = model(images)
-                    loss = protocol_loss(logits, targets, voxel_weights, case_weights)
+                    loss = protocol_loss(
+                        logits,
+                        targets,
+                        voxel_weights,
+                        case_weights,
+                        alignment_core_mask=batch.get("alignment_core_mask").to(device) if "alignment_core_mask" in batch else None,
+                        alignment_core_target=batch.get("alignment_core_target").to(device) if "alignment_core_target" in batch else None,
+                        alignment_core_weight=batch.get("alignment_core_weight").to(device) if "alignment_core_weight" in batch else None,
+                        alignment_teacher=batch.get("alignment_teacher").to(device) if "alignment_teacher" in batch else None,
+                        alignment_trust_weight=batch.get("alignment_trust_weight").to(device) if "alignment_trust_weight" in batch else None,
+                        alignment_core_loss_weight=float(self.alignment_cfg.get("core_loss_weight", 0.0)) if active_alignment else 0.0,
+                        alignment_distill_loss_weight=float(self.alignment_cfg.get("distill_loss_weight", 0.0)) if active_alignment else 0.0,
+                        alignment_volume_guard_weight=float(self.alignment_cfg.get("volume_guard_weight", 0.0)) if active_alignment else 0.0,
+                        alignment_added_margin_probability=float(self.alignment_cfg.get("added_margin_probability", 0.7)),
+                        alignment_removed_margin_probability=float(self.alignment_cfg.get("removed_margin_probability", 0.3)),
+                        alignment_max_volume_ratio=float(self.alignment_cfg.get("max_volume_ratio", 1.03)),
+                        alignment_volume_min_target_mass=float(self.alignment_cfg.get("volume_guard_min_target_mass", 1.0)),
+                        alignment_signed_balance_edits=bool(self.alignment_cfg.get("signed_balance_edits", False)),
+                    )
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()

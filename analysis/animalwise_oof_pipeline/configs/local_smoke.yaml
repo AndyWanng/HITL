@@ -1,0 +1,61 @@
+experiment_name: local_smoke_animalwise_oof
+seed: 20260524
+
+paths:
+  source_workspace: workspace_v0/workspace
+  epibios_data_root: data
+  aramra_root: E:/Hemorrhage/ARAMRA002_standardized
+  run_root: analysis/animalwise_oof_pipeline/runs
+
+limits:
+  epibios_animals: 4
+  aramra_cases: 4
+
+split:
+  folds: 2
+
+model:
+  in_channels: 1
+  out_channels: 1
+  stage_channels: [4, 8, 12, 16, 24, 32]
+  dropout_bottleneck: 0.0
+
+training:
+  device: cuda
+  amp: true
+  batch_size: 1
+  num_workers: 0
+  patch_size: [64, 64, 32]
+  patches_per_case: 1
+  positive_patch_probability: 0.7
+  validation:
+    enabled: false
+    fraction: 0.125
+    min_cases: 1
+  round0:
+    epochs: 1
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+  round1:
+    epochs: 1
+    lr: 5.0e-6
+    weight_decay: 1.0e-4
+  alpha: 0.15
+  case_weight_reviewed: 2.0
+  case_weight_unreviewed: 1.0
+  voxel_weight_floor: 0.5
+  run_r1_hard: false
+
+inference:
+  patch_size: [64, 64, 32]
+  overlap: 0.5
+  threshold: 0.5
+  tta_modes: [identity]
+  postprocess_min_component_voxels: [2]
+  save_probabilities: true
+  save_masks: true
+
+stages:
+  run_r0: true
+  run_r1: true
+  eval_aramra: true

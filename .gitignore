@@ -1,15 +1,59 @@
+# Python caches and build output
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .coverage
+htmlcov/
 dist/
 build/
 *.egg-info/
-workspace/
-.ruff_cache/
-.DS_Store
+
+# Local environments and editor state
+.venv/
+venv/
+env/
 .idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local data and HITL workspaces
 /data/
+/workspace*/
+/workspace_*/
+/workspace_round1_correction*/
+/Round 1 result/
+/prepared_round_1_import/
+
+# Experiment outputs and generated analysis artefacts
+/analysis/results/
+/analysis/animalwise_oof_pipeline/runs/
+/analysis/animalwise_oof_pipeline/reports/*.log
+/analysis/workspace_v0_full_external_analysis/predictions/
+/analysis/workspace_v0_full_external_analysis/logs/
+/analysis/workspace_v0_full_external_analysis/metadata/
+/analysis/workspace_v0_full_external_analysis/results/
+/analysis/workspace_v0_full_external_analysis/status/
+/analysis_attempt3_diagnostics/
+
+# Medical-imaging data, predictions, probabilities, and checkpoints
+*.nii
+*.nii.gz
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+
+# Runtime logs and local databases
+*.log
+*.tmp
+*.bak
+*.db
+*.sqlite
+*.sqlite3
+.ipynb_checkpoints/

@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from hemorrhage.data.nifti import copy_nifti, label_histogram, load_nifti, project_binary_mask, read_metadata_csv, validate_label_codes, write_metadata_csv
-from hemorrhage.protocol.metrics import dice_score
+from hemorrhage.protocol.metrics import dice_score, edit_ratio
 from hemorrhage.utils import ensure_dir
 
 
@@ -69,10 +69,11 @@ def import_review_label(label_path: Path) -> dict[str, Any]:
 
 def compute_review_stats(previous_binary: np.ndarray, imported_binary: np.ndarray, anchor_binary: np.ndarray | None = None) -> dict[str, float]:
     modified_slices = int(np.any(previous_binary != imported_binary, axis=(0, 1)).sum())
-    edit = float(np.mean(previous_binary != imported_binary))
+    whole_volume_edit = float(np.mean(previous_binary != imported_binary))
     payload = {
         "modified_slices_count": float(modified_slices),
-        "edit_ratio": edit,
+        "edit_ratio": edit_ratio(imported_binary, previous_binary),
+        "whole_volume_edit_ratio": whole_volume_edit,
     }
     if anchor_binary is not None:
         payload["anchor_assisted_dice"] = float(dice_score(anchor_binary, imported_binary))

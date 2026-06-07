@@ -28,9 +28,108 @@ training:
     lr: 1.0e-4
     weight_decay: 1.0e-4
   finetune:
-    epochs: 10
-    lr: 2.0e-5
+    epochs: 50
+    lr: 5.0e-6
     weight_decay: 1.0e-4
+  alignment:
+    enabled: false
+    mode: teacher_residual_no_regret
+    teacher: auto
+    require_teacher: true
+    resume_from_teacher_checkpoint: true
+    require_teacher_checkpoint: true
+    no_regret_enabled: true
+    selection_metric: macro_dice_postprocessed
+    accept_margin: 0.001
+    max_volume_drift_fraction: 0.02
+    candidate_blend_lambdas: [0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0]
+    unreviewed_target: teacher
+    reviewed_supervision: edit_only
+    train_backbone: false
+    signed_balance_edits: true
+    tiny_lesion_guard: true
+    tiny_lesion_voxels: 100
+    tiny_accept_margin: 0.0
+    tiny_fp_margin: 0.0
+    added_core_threshold: 0.3
+    removed_core_threshold: 0.5
+    core_dilation_iterations: 0
+    core_patch_probability: 0.20
+    reviewed_positive_patch_probability: 0.50
+    core_weight_floor: 0.25
+    core_loss_weight: 0.08
+    added_margin_probability: 0.7
+    removed_margin_probability: 0.3
+    teacher_confidence_threshold: 0.85
+    trust_use_confidence_weight: true
+    distill_loss_weight: 0.15
+    volume_guard_weight: 0.05
+    max_volume_ratio: 1.03
+    volume_guard_min_target_mass: 1.0
+    freeze_encoder_epochs: 8
+  revision_policy:
+    enabled: true
+    mode: sgra
+    base_round1: auto
+    require_base_round1: true
+    use_round0: true
+    strict_oof: true
+    candidate:
+      p0_threshold: 0.3
+      p_base_threshold: 0.5
+      low_threshold: 0.25
+      disagreement_threshold: 0.25
+      teacher_uncertainty_quantile: 0.995
+      round0_uncertainty_quantile: 0.995
+      boundary_dilation_iterations: 2
+      edit_dilation_iterations: 2
+      min_component_voxels: 2
+    oracle:
+      enabled: true
+      min_add_coverage: 0.70
+      min_remove_coverage: 0.70
+    component_selector:
+      enabled: true
+      train: true
+      model: logistic_ridge
+      l2: 1.0
+      apply_threshold: 0.65
+      min_predicted_gain: 0.0005
+      abstain_margin: 0.00025
+    adapter:
+      enabled: true
+      train: true
+      input_channels:
+        - image
+        - p_base
+        - p_round0
+        - abs_base_round0
+        - q_base
+        - q_round0
+        - boundary_distance
+        - old_label
+      epochs: 30
+      lr: 5.0e-5
+      batch_size: 2
+      patches_per_case: 4
+      patch_size: [128, 96, 64]
+      add_patch_probability: 0.30
+      remove_patch_probability: 0.30
+      hard_negative_patch_probability: 0.20
+      identity_patch_probability: 0.20
+      identity_loss_weight: 10.0
+      gate_l1_weight: 0.1
+      gate_tv_weight: 0.05
+      volume_guard_weight: 0.05
+    accept:
+      component_no_regret: true
+      max_case_volume_drift_fraction: 0.05
+      max_changed_fraction_of_base_positive: 0.10
+      tiny_lesion_voxels: 100
+      tiny_absolute_changed_voxels: 8
+    outputs:
+      write_hitl_corrected_system: true
+      write_baseline_comparison: true
 augmentation:
   flip_axes: [0, 1]
   intensity_scale_range: [0.9, 1.1]
@@ -42,6 +141,6 @@ inference:
   threshold: 0.5
 postprocessing:
   threshold: 0.5
-  min_component_voxels: 16
+  min_component_voxels: 2
   keep_largest_component: false
   save_binary_masks: true

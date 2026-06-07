@@ -54,5 +54,6 @@ def override_project_configs(root: Path, project_root: Path) -> None:
     model_cfg["training"]["patches_per_case"] = 1
     model_cfg["training"]["round0"]["epochs"] = 2
     model_cfg["training"]["finetune"]["epochs"] = 1
+    model_cfg["training"].setdefault("alignment", {})["enabled"] = True
+    model_cfg["training"].setdefault("revision_policy", {})["enabled"] = False
     configs_dst.joinpath("model.yaml").write_text(yaml.safe_dump(model_cfg, sort_keys=False), encoding="utf-8")
-

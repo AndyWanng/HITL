@@ -1,0 +1,612 @@
+先说结论：**下一步不应该只是把 171 个 ARAMRA002 9.4T case 加进去继续训练，也不应该强行把论文写成“多轮 HITL loop”。**
+更强、更顶刊化的方向是把问题升级为：
+
+> **在纵向重复扫描、小动物 MRI、多场强/多 cohort/domain、标签质量不均一的条件下，如何做 animal-aware、domain-aware、label-quality-aware 的 hemorrhage segmentation，并用一轮 HITL revise 作为 clean supervision anchor 来提升真实泛化。**
+
+换句话说，新的主线应该从：
+
+> “HITL finetune 后 Dice 从 0.71 到 0.74”
+
+改成：
+
+> **“case-level HITL improvement 是否真的代表 animal-level / cohort-level / timepoint-level generalization？如果不是，如何利用已有 revise 信号和额外 171 个纵向 9.4T case 构建更稳健的 longitudinal/domain-aware segmentation framework？”**
+
+这会比单纯多跑几轮 finetune 更有 novelty。
+
+---
+
+## 1. 补充信息改变了什么
+
+现在数据结构其实是：
+
+| Cohort    | Case 数 |           Animal 数 | 场强                | 纵向结构                               | 当前使用状态                                   |
+| --------- | -----: | -----------------: | ----------------- | ---------------------------------- | ---------------------------------------- |
+| EpiBios   |    127 |                 33 | 4.7T + 9.4T mixed | 多数每只动物 3–4 个 timepoints            | 已做 5-fold OOF + 一轮 20:10 revise/finetune |
+| ARAMRA002 |    171 | 约 96 个严格 animal ID | 9.4T              | 多数 D9/M5 双时间点，另有 D9-only/repeat D9 | 完全未用于训练，case 不重叠                         |
+
+这意味着目前最重要的风险不是“数据量不够”，而是：**原来的 5-fold OOF 很可能是 case-level split，而不是 animal-level split。** 你的 repo 现在会建立固定 5-fold OOF、做 review planning、import routine/audit annotation、fine-tune fold-specific models 和导出 reports；代码层面这是一个完整 workflow。([GitHub][1]) 但是如果同一只动物的不同 timepoints 被分到不同 folds，那么 holdout case 的训练集里可能有同一动物的其他扫描。纵向 MRI 文献明确指出，longitudinal repeated scans 如果没有 subject-wise split，cross-validation 可能出现 identity leakage，模型会学到 subject identity shortcut，导致性能估计过于乐观。([arXiv][2])
+
+所以现在的 0.71 和 0.74 不能直接作为“新动物泛化性能”的证据。它更像是：
+
+> **session-level / case-level OOF performance under the original operational HITL split。**
+
+这不是废掉旧实验，而是重新定位旧实验。旧 split 和旧 revise 可以保留，作为 **HITL operational trace**；但论文主评估需要补一个 **animal-wise / cohort-wise / timepoint-wise generalization layer**。
+
+---
+
+## 2. 我认为最有潜力的论文主线
+
+我建议把主线定为：
+
+> **Animal-aware longitudinal HITL refinement for robust hemorrhage segmentation in preclinical MRI.**
+
+或者更强一点：
+
+> **From case-level HITL gains to animal-level longitudinal generalization: robust hemorrhage segmentation across field strength, cohort, and timepoint shift.**
+
+这个方向有四个 gap 可以串起来。
+
+**Gap 1：rodent lesion segmentation 仍然是低资源、高人工成本任务。**
+已有 rodent MRI lesion segmentation 工作强调，手工分割 rodent brain lesions 费时、主观，而且专门针对 rodent lesion segmentation 的 deep learning 工作相对少；RatLesNet 的早期工作就是围绕这个 gap 展开的。([arXiv][3]) 你现在的 hemorrhage segmentation 是更特定的 preclinical longitudinal MRI 场景，这个 niche 是有价值的。
+
+**Gap 2：active learning / HITL 医学影像通常关注“选哪些样本标注”，但很少严肃处理 longitudinal repeated animals 的 split 和 leakage。**
+医学 active learning 的核心动机是专家标注成本高，因此要选择最 informative samples；survey 也总结了 informativeness、sampling strategy、semi-/self-supervised integration 等问题。([arXiv][4]) 但你的数据不是 i.i.d. case pool，而是同一动物多时间点扫描。这个结构如果处理不好，HITL selection、OOF performance、finetune gain 都会混入 identity confounding。
+
+**Gap 3：MRI scanner/protocol/domain shift 是真实问题，且 MRI 的 scanner domain shift 比 CT 更明显。**
+近期 scanner domain shift 研究指出，不同 scanner/protocol 会造成 medical images 外观差异，deep network 跨 scanner 性能通常下降，而且 MRI 的 drop 尤其明显。([arXiv][5]) 你的 EpiBios 混合 4.7T/9.4T，ARAMRA002 又是独立 9.4T cohort，这正好可以做 **cross-cohort / cross-protocol / field-strength-confounded domain generalization**。但要注意：现在不能简单声称“纯 field-strength effect”，因为 4.7T/9.4T 很可能和采集年份、site、protocol、cohort 同时 confounded。
+
+**Gap 4：reviewed 和 unreviewed labels 的质量不同，naive finetune 会产生监督冲突。**
+医学分割里，把 noisy human annotation 直接当 ground truth 会限制模型性能，尤其在 annotation cost 高、inter-observer variability 大的场景。([arXiv][6]) 近年的 noisy-label medical segmentation 也在用 Mean Teacher、自适应 label correction、uncertainty-based label selection、consistency learning 来缓解 noisy labels。([arXiv][7]) 你这里天然有一个 clean/noisy partition：**一轮 revised EpiBios labels 是 relatively clean；unrevised EpiBios 和未使用 ARAMRA002 labels 是 less trusted / unverified labels。**
+
+这四个 gap 合起来，比“做一轮 HITL 后 Dice 提高 0.03”强很多。
+
+---
+
+## 3. 不要改旧 HITL 逻辑，但要新增一个 animal-aware analysis layer
+
+你的限制是合理的：原始 HITL split 已经完成，一次 revise 也已经完成，所以不要推翻它。我的建议是：
+
+> **旧流程保留为 Stage-1 operational HITL；新增 Stage-2 animal-aware longitudinal/domain validation and robust training。**
+
+也就是论文里明确写：
+
+1. Stage 1：已有 127 EpiBios cases，按现有 repo 完成 5-fold OOF + routine/audit HITL revise + finetune。这个流程继续使用原有逻辑。repo 当前 selection 也是有价值的：它把 budget 近似拆成 routine:audit = 2:1，case score 使用 human-model disagreement、TTA uncertainty 和 review cost，并对 routine repeated review 加惩罚。([GitHub][8]) ([GitHub][8])
+
+2. Stage 2：在不改变 Stage 1 的基础上，新增：
+
+   * animal-level leakage report；
+   * static-reference evaluation；
+   * animal-wise group split retraining；
+   * ARAMRA002 locked external evaluation；
+   * longitudinal/timepoint subgroup analysis；
+   * clean/noisy robust finetune。
+
+这样旧结果不会浪费，但论文主 claim 不再依赖旧 case-level OOF。
+
+---
+
+## 4. 现在最应该立刻做的 6 个分析
+
+### 4.1 做一个 metadata master table
+
+先把所有 298 cases 统一成一张表：
+
+| 字段               | 说明                                                                  |
+| ---------------- | ------------------------------------------------------------------- |
+| case_id          | 原始 case 名                                                           |
+| cohort           | EpiBios / ARAMRA002                                                 |
+| animal_id_strict | 例如合并 `R2810` / `2810C` 后的生物学动物 ID                                   |
+| animal_id_raw    | 原始 ID，保留 traceability                                               |
+| time_raw         | D02/D09/D28/M01/M05/W04/W20/S1-S4/D9/M5                             |
+| time_numeric     | 能确定的用天数；S1-S4 只做 ordinal，不硬转天数                                      |
+| session_order    | 每只动物内部排序                                                            |
+| field_strength   | 4.7T / 9.4T / unknown                                               |
+| original_fold    | 旧 5-fold fold ID                                                    |
+| revised_status   | none / routine / audit                                              |
+| label_round      | round0 / round1 final                                               |
+| label_trust      | revised=high，unrevised=medium，ARAMRA initial=medium/unknown         |
+| split_new        | source-train / source-val / target-adapt / target-val / locked-test |
+
+尤其注意：**S1-S4 不要假装等价于 D02/D09/D28/M05。** 它们只应该作为 ordinal session，除非导师给的 protocol 表能确认真实时间。
+
+---
+
+### 4.2 做 original split 的 animal leakage audit
+
+对原来的 5 folds，统计：
+
+| 指标                                 | 含义                                                                |
+| ---------------------------------- | ----------------------------------------------------------------- |
+| animal_overlap_rate                | holdout fold 中有多少 case 的同一 animal 其他 timepoint 出现在 training folds |
+| holdout_animals_with_train_sibling | 每个 fold 有多少 holdout animal 在 train 中出现过                           |
+| same_animal_train_timepoints       | 每个 holdout case 的 train sibling timepoint 数                       |
+| leakage_by_field                   | 4.7T/9.4T 子集是否都存在同 animal leakage                                 |
+| leakage_by_timepoint               | D02/D09/M05 等 timepoint 是否不同程度 leakage                            |
+
+如果这个比例很高，那么这就是论文的关键 motivation：
+
+> **The original case-level OOF protocol is operationally valid for HITL assistance, but not sufficient for estimating generalization to unseen animals.**
+
+这不会否定你之前的工作，而是把它升级成更严谨的 research question。
+
+---
+
+### 4.3 做 revised / unrevised 的 static-reference matrix
+
+现在 0.71→0.74 最大的问题是 reference label 也变了。建议做一个 2×2 matrix：
+
+| Prediction model | Reference label      | 目的                          |
+| ---------------- | -------------------- | --------------------------- |
+| Round0 model     | Round0 label         | 原始 baseline                 |
+| Round0 model     | Round1 revised label | 看旧模型对 revised truth 的真实差距   |
+| Round1 model     | Round1 revised label | 当前 finetune gain            |
+| Round1 model     | Round0 label         | 看模型是否只是贴近新 label 而偏离旧 label |
+
+然后分开报告：
+
+* revised cases；
+* unrevised EpiBios cases；
+* audit cases；
+* 4.7T cases；
+* 9.4T EpiBios cases；
+* known timepoint cases；
+* S1-S4 ordinal cases。
+
+repo 目前的 soft target 是 `(1-alpha)*binary + alpha*OOF`，`alpha=0.15`，reviewed case 和 unreviewed case 的 voxel weights 也不同。([GitHub][9]) 所以 static-reference matrix 很重要，否则 reviewers 会问：Dice 提高到底是模型提高，还是 label target 换了？
+
+---
+
+### 4.4 用现有模型直接测 ARAMRA002
+
+先不要训练，先用已有 round0 / round1 5-fold ensemble 对 171 ARAMRA002 做 external prediction。
+
+这一步非常关键，因为它会决定论文走向：
+
+| 结果                         | 解释                           | 下一步                                            |
+| -------------------------- | ---------------------------- | ---------------------------------------------- |
+| ARAMRA Dice 明显低            | cross-cohort/domain shift 强  | 主线走 domain adaptation + HITL target selection  |
+| ARAMRA Dice 接近 EpiBios OOF | 模型泛化不错                       | 主线走 label-efficiency + longitudinal validation |
+| ARAMRA D9 好、M5 差           | timepoint/domain shift       | 主线走 timepoint-aware longitudinal model         |
+| ARAMRA M5 好、D9 差           | early lesion/small lesion 问题 | 主线走 lesion-stage aware model                   |
+| D9/M5 pair 内性能波动大          | longitudinal consistency 问题  | 主线走 paired temporal audit                      |
+
+注意，这里 ARAMRA002 全是 9.4T，所以它不是低场强 external test。它更适合定义为：
+
+> **independent 9.4T longitudinal target cohort / external cohort。**
+
+如果你把它说成 field-strength generalization，会被审稿人抓住，因为 unused cohort 没有 4.7T。
+
+---
+
+### 4.5 重新训练一个 animal-wise EpiBios baseline
+
+这个不是推翻旧 split，而是新增 unbiased analysis。
+
+用 EpiBios 33 animals 做 5-fold group split，每 fold 6–7 只动物。所有同一 animal 的 timepoints 必须在同一 fold。训练时可以用：
+
+* round0 labels；
+* round1 labels，其中 revised cases 用 final label，unrevised cases 用原 label；
+* 不改变旧 HITL，只是新实验。
+
+你要比较：
+
+| Evaluation              | Split                             | 意义                           |
+| ----------------------- | --------------------------------- | ---------------------------- |
+| original case-level OOF | 原旧 split                          | operational HITL metric      |
+| new animal-wise OOF     | same 127 cases, grouped by animal | unseen-animal generalization |
+| external ARAMRA002      | independent cohort                | cross-cohort generalization  |
+
+如果 original case-level OOF 0.71，而 animal-wise OOF 明显更低，这就是强动机：**之前的主要问题不是多轮 HITL 不够，而是 evaluation granularity 错了。**
+
+---
+
+### 4.6 做 timepoint-level analysis
+
+尤其 ARAMRA002 很适合，因为 69 只动物有 D9/M5 pair。
+
+建议至少报告：
+
+| 分析                         | 目的                                                               |
+| -------------------------- | ---------------------------------------------------------------- |
+| D9 vs M5 Dice              | early/late stage segmentation 差异                                 |
+| D9→M5 paired volume change | model 是否捕捉纵向变化                                                   |
+| per-animal average Dice    | 避免一只动物多个 case 独立计数                                               |
+| repeat D9 consistency      | A2970/A2972/A2973/A2975/A2838 等重复 D9 可检查 scan-rescan consistency |
+| complete-pair vs D9-only   | 数据缺失是否影响模型                                                       |
+
+统计上，不要只按 case bootstrap。应该按 **animal-level bootstrap** 或 mixed-effects model：
+
+[
+metric \sim model + cohort + timepoint + field/domain + (1|animal)
+]
+
+这会显著提高论文严谨度。
+
+---
+
+## 5. 最推荐的实验设计
+
+### Dataset split 建议
+
+#### EpiBios 127 cases / 33 animals
+
+用途：source cohort + existing HITL trace。
+
+保留旧 split 和旧 revise。新增一个 group split：
+
+| Split                    | 单位                   | 用途                             |
+| ------------------------ | -------------------- | ------------------------------ |
+| EpiBios-original-OOF     | case-level old folds | 复现现有 HITL result               |
+| EpiBios-animal-CV        | animal-level 5 folds | unbiased source generalization |
+| EpiBios-revised subset   | 30 revised cases     | clean supervision anchor       |
+| EpiBios-unrevised subset | 97 cases             | noisy / less trusted labels    |
+
+#### ARAMRA002 171 cases / 96 animals
+
+严格按 animal split，不按 case split。
+
+一个可行方案：
+
+| Split                        |        Animal 数 | Case 构成建议                               | 用途                                              |
+| ---------------------------- | --------------: | --------------------------------------- | ----------------------------------------------- |
+| locked external test         |   20–24 animals | 优先包含 D9/M5 complete pairs，也保留少量 D9-only | 最终只评估                                           |
+| target validation            |   10–12 animals | 同样按 D9/M5 分层                            | threshold/model selection                       |
+| target adaptation/train pool | 剩余约 60+ animals | complete pairs + D9-only                | training/adaptation/active selection simulation |
+
+如果 clinical review 还能再给一点资源，最值得 review 的不是随机单个 case，而是：
+
+> **10–15 个 ARAMRA002 animals 的 paired D9/M5 audit。**
+
+因为 paired review 可以同时验证 segmentation quality、timepoint consistency、label drift、D9/M5 domain shift。这个比再随便 revise 20 个 EpiBios cases 更有论文价值。
+
+---
+
+## 6. 模型实验矩阵
+
+### 6.1 必做 baseline
+
+| Model       | Training data                                     | Split discipline   | 目的                            |
+| ----------- | ------------------------------------------------- | ------------------ | ----------------------------- |
+| M0-old      | EpiBios 127, old round0                           | old case-level OOF | 复现 0.71                       |
+| M1-old-HITL | EpiBios 127, round1 HITL labels                   | old case-level OOF | 复现 0.74                       |
+| M0-animal   | EpiBios 127, round0 labels                        | animal-wise CV     | 测 true unseen-animal baseline |
+| M1-animal   | EpiBios 127, revised final labels where available | animal-wise CV     | 测 HITL 对 animal-level 是否有效    |
+| M-ext       | old M0/M1 ensemble → ARAMRA002                    | locked AR external | 测 cross-cohort generalization |
+
+这组实验会先回答最重要的问题：**当前 0.74 是否只是 revised/case-level gain，还是有 animal/external generalization gain。**
+
+---
+
+### 6.2 利用 171 ARAMRA002 的训练实验
+
+如果 ARAMRA002 labels 是可用的，但没有经过 HITL revise，那么不要把它们当成同等质量 truth。建议做 label-trust training。
+
+| Model                      | Training data | Label trust                               |
+| -------------------------- | ------------- | ----------------------------------------- |
+| Epi-only                   | 127 EpiBios   | revised high, unrevised medium            |
+| AR-only                    | 171 ARAMRA    | all medium/unknown                        |
+| Epi+AR naive               | 298 cases     | all equal                                 |
+| Epi+AR trust-weighted      | 298 cases     | revised EpiBios high, unrevised/AR medium |
+| Epi+AR trust + time/domain | 298 cases     | 加 cohort/timepoint/domain embedding       |
+| Epi+AR robust clean/noisy  | 298 cases     | clean/noisy loss + consistency            |
+
+重点不是“加数据一定提升”，而是测试：
+
+> **未复核标签的大量 target-domain data 是否会因为 label noise/domain shift 反而伤害模型？HITL revised labels 能否作为 clean anchor 稳住训练？**
+
+这比“把 171 个 case 加进去训练一下”高级很多。
+
+---
+
+## 7. 方法创新可以放在哪里
+
+我建议的方法创新不要太重，因为你已经有现成 repo 和一次 revise。最合适的是 **在现有流程上加三个轻量但论文级的模块**。
+
+### 模块 1：Animal-aware evaluation and split correction
+
+这是必须有的。
+
+旧 repo 的 workflow 是 case-level operational HITL；新增：
+
+* `animal_id` parser；
+* group-wise fold assignment；
+* animal-level bootstrap；
+* same-animal leakage report；
+* per-animal metrics aggregation。
+
+这个模块的 novelty 是发现并解决 longitudinal preclinical MRI segmentation 的 **case-level OOF over-optimism**。
+
+---
+
+### 模块 2：Clean/noisy label-trust finetune
+
+把 labels 分成三档：
+
+| Label 类型                          |          Trust | 训练策略                                            |
+| --------------------------------- | -------------: | ----------------------------------------------- |
+| revised final label               |           high | full supervised loss                            |
+| unrevised EpiBios label           |         medium | downweighted supervised loss + uncertainty mask |
+| ARAMRA002 initial label           | medium/unknown | domain-aware weight + consistency               |
+| new paired audit revised AR label |           high | full supervised loss                            |
+
+loss 可以写成：
+
+[
+L = L_{clean} + \lambda_n L_{noisy} + \lambda_c L_{consistency}
+]
+
+其中：
+
+* `clean` = revised EpiBios + optional newly reviewed ARAMRA；
+* `noisy` = unrevised EpiBios + unreviewed ARAMRA；
+* consistency 可以用 TTA、strong/weak augmentation、或者 EMA teacher。
+
+这正好对应 noisy-label segmentation 文献里的问题：高质量 annotation 少，noisy label 多，直接混合会降低模型表现。([arXiv][7])
+
+---
+
+### 模块 3：Longitudinal paired audit / temporal consistency score
+
+这是最有顶刊潜力的部分，但也最需要谨慎。
+
+不要强行假设 hemorrhage volume 单调变化。D9 到 M5 可能有吸收、组织改变、信号变化，不应该硬加 monotonic loss。更安全的是做：
+
+> **temporal inconsistency as review-prior, not as ground truth constraint。**
+
+例如对同一 animal 的 D9/M5：
+
+1. 分别预测 `p_D9` 和 `p_M5`；
+2. 记录 lesion volume、connected components、uncertainty；
+3. 对 paired scans 做粗 registration 或至少 same-space 检查；
+4. 计算：
+
+   * high uncertainty at either timepoint；
+   * large unexpected component fragmentation；
+   * model prediction vs label disagreement；
+   * D9/M5 lesion burden transition outlier；
+   * repeat D9 scan-rescan inconsistency。
+
+然后把它变成 paired audit score：
+
+[
+Score_{pair} =
+0.35 U_{pair}
+
+* 0.25 D_{label-model}
+* 0.20 OOD_{feature}
+* 0.20 T_{inconsistency}
+  ]
+
+再除以 review cost。
+
+这样不是说“时间一致就一定正确”，而是说：
+
+> **纵向不一致是更值得专家 audit 的信号。**
+
+这和你现有 routine/audit 逻辑兼容，因为 repo 当前已经有 audit 选择、anchor/final review、edit ratio、anchor-final stability 和 stopping 相关指标。([GitHub][8]) ([GitHub][9]) 你只是把 audit 的单位从 single case 扩展到 animal/timepoint pair。
+
+---
+
+## 8. 论文里可以形成的主 claim
+
+比较稳的 claim 是：
+
+1. **Case-level OOF is insufficient in longitudinal preclinical MRI.**
+   同一 animal 多 timepoints 会导致 case-level split 高估泛化；animal-wise split 是必要评估。
+
+2. **One-round HITL improves revised-label agreement but does not automatically imply unseen-animal or external-cohort improvement.**
+   这正好解释你目前观察到的结果，而不是回避它。
+
+3. **A small set of expert-revised labels can serve as clean anchors for robust training with larger unreviewed/noisy longitudinal cohorts.**
+   这把你的一轮 revise 变成方法核心，而不是流程不足。
+
+4. **Longitudinal paired audit is more informative than single-case review under limited expert budget.**
+   如果你能补 10–15 个 ARAMRA paired audit，这个 claim 会很强。
+
+5. **External ARAMRA002 9.4T validation separates true generalization from internal HITL gains.**
+   171 个未用 case 是你最大的 asset。不要把它们一开始全混进训练；先拿出 locked test。
+
+---
+
+## 9. 具体下一步路线图
+
+### 第一步：不要训练，先做 data audit 和 split audit
+
+输出 4 个文件：
+
+```text
+metadata_master.csv
+original_fold_animal_leakage.csv
+cohort_timepoint_summary.csv
+field_strength_summary.csv
+```
+
+必须回答：
+
+* 原 5-fold 中有多少 holdout case 的同 animal 出现在 train？
+* 每 fold 的 animal 数是否均衡？
+* 4.7T / 9.4T 在原 fold 中是否均衡？
+* revised 30 cases 分布在哪些 animal/timepoint/field？
+* ARAMRA002 complete D9/M5 animals 有多少能作为 locked paired test？
+
+---
+
+### 第二步：跑 external ARAMRA002 prediction
+
+用旧 round0 和 round1 模型分别 predict ARAMRA002。不要训练。
+
+输出：
+
+| Metric        | Overall | D9 | M5 | D9-only | complete-pair | repeat-D9 |
+| ------------- | ------: | -: | -: | ------: | ------------: | --------: |
+| Dice          |         |    |    |         |               |           |
+| HD95          |         |    |    |         |               |           |
+| lesion-F1     |         |    |    |         |               |           |
+| volume error  |         |    |    |         |               |           |
+| FP components |         |    |    |         |               |           |
+
+如果 ARAMRA performance 明显低，这篇文章的 motivation 会非常清楚。
+
+---
+
+### 第三步：重新做 EpiBios animal-wise CV
+
+训练两个模型：
+
+1. EpiBios animal-wise baseline，使用 round0 labels；
+2. EpiBios animal-wise HITL-refined，使用 revised labels where available。
+
+对比：
+
+| Model             | original case-level OOF | animal-wise OOF | ARAMRA external |
+| ----------------- | ----------------------: | --------------: | --------------: |
+| Round0            |                    0.71 |               ? |               ? |
+| Round1 naive HITL |                    0.74 |               ? |               ? |
+
+这个表是论文核心。如果出现：
+
+* original OOF 好；
+* animal-wise 差；
+* external 更差；
+
+那么故事非常强：**现有 HITL gain 是必要但不充分，需要 animal-aware robust longitudinal learning。**
+
+---
+
+### 第四步：用 171 ARAMRA 做 controlled training，不要一锅炖
+
+训练矩阵：
+
+| 训练方案                       | 是否用 ARAMRA | 是否用 revised trust | 是否 animal-wise | 是否 timepoint-aware |
+| -------------------------- | ---------- | ----------------- | -------------- | ------------------ |
+| Epi-only naive             | 否          | 否                 | 是              | 否                  |
+| Epi-only HITL refined      | 否          | 是                 | 是              | 否                  |
+| AR-only                    | 是          | 否                 | 是              | 是/否                |
+| Epi+AR naive               | 是          | 否                 | 是              | 否                  |
+| Epi+AR trust-weighted      | 是          | 是                 | 是              | 否                  |
+| Epi+AR trust + time/domain | 是          | 是                 | 是              | 是                  |
+| Epi+AR robust clean/noisy  | 是          | 是                 | 是              | 是                  |
+
+不要只看 Dice。也看：
+
+* lesion-level recall；
+* small hemorrhage sensitivity；
+* volume error；
+* per-animal mean performance；
+* D9 vs M5；
+* 4.7T vs 9.4T EpiBios；
+* ARAMRA locked test。
+
+---
+
+### 第五步：如果还能让临床做少量 review，优先 review ARAMRA paired audit
+
+最有价值的新增人工工作不是“第二轮 EpiBios revise”，而是：
+
+> **在 ARAMRA002 中选 10–15 只动物，每只动物 D9/M5 pair 一起 review。**
+
+选择策略：
+
+* 高 TTA uncertainty；
+* high model-label disagreement；
+* D9/M5 transition outlier；
+* feature OOD；
+* small lesion / fragmented lesion；
+* 覆盖 D9-only 和 repeat-D9 特殊类型。
+
+这个 review 产生三个东西：
+
+1. target-domain clean labels；
+2. paired temporal label-quality evidence；
+3. active selection score 的真实 yield validation。
+
+这比继续修旧 127 中已经修过的高分 case 更有论文价值。
+
+---
+
+## 10. 哪些说法要避免
+
+**不要说：低场强 external validation。**
+因为未使用的 171 个 ARAMRA002 都是 9.4T。除非你还有独立 4.7T unused cohort，否则只能说 EpiBios 内部有 mixed field strength，ARAMRA002 是 independent 9.4T target cohort。
+
+**不要只报告 case-level Dice。**
+纵向重复扫描下，case-level CI 会过窄，显得样本量比真实 biological animals 多。主表要用 animal-level aggregation。
+
+**不要把 ARAMRA002 全部直接加入训练再汇报一个 298-case OOF。**
+这样会浪费掉最珍贵的 external validation 机会。必须先锁一部分 ARAMRA animals 做 final test。
+
+**不要把 existing 0.74 当成最终模型性能。**
+它目前更像 revised subset agreement improvement。要用 static-reference matrix 和 external ARAMRA test 判断真实价值。
+
+**不要强行 claim 多轮 HITL。**
+你只有一轮 revise。可以 claim one-round expert refinement / audit-calibrated label refinement / clean-anchor robust learning，但不要 claim iterative convergence，除非真的做多轮。
+
+---
+
+## 11. 最终推荐的顶刊化方案
+
+我会把项目重构成三层：
+
+### Layer 1：Evidence layer
+
+证明现有问题真实存在：
+
+* case-level OOF vs animal-wise OOF；
+* revised vs unrevised gain；
+* EpiBios vs ARAMRA external gap；
+* D9 vs M5 timepoint gap；
+* 4.7T/9.4T/domain subgroup gap。
+
+### Layer 2：Method layer
+
+提出：
+
+> **Animal-aware, longitudinal, clean/noisy HITL training framework。**
+
+核心是：
+
+* 保留原 HITL revise；
+* revised labels 作为 clean anchor；
+* unreviewed labels 作为 noisy supervision；
+* ARAMRA target cohort 用 animal-wise split；
+* paired longitudinal audit score；
+* robust loss / label-trust weighting / consistency learning。
+
+### Layer 3：Clinical/preclinical utility layer
+
+证明：
+
+* 少量 expert revise 能带来多少 external / animal-wise improvement；
+* paired audit 比 random single-case audit 更高 yield；
+* 模型能稳定输出 D9/M5 longitudinal hemorrhage burden；
+* 是否接近 label quality ceiling。
+
+---
+
+## 12. 最短可执行版本
+
+如果时间和计算资源有限，最小版本按这个顺序做：
+
+1. 建 metadata master table。
+2. 做 original split animal leakage audit。
+3. 用现有 round0/round1 模型预测全部 ARAMRA002。
+4. 做 EpiBios animal-wise retraining。
+5. 做 static-reference matrix。
+6. 训练 trust-weighted clean/noisy model。
+7. 如果临床还能帮忙，只做 10–15 个 ARAMRA D9/M5 paired audit。
+
+这样你不需要重做旧 HITL，也不需要强行多轮 revise，但论文故事会从一个“工程 HITL workflow”升级成：
+
+> **纵向动物 MRI 中，case-level HITL improvement 与真实 animal/domain generalization 之间存在 gap；我们用 animal-aware evaluation、external longitudinal cohort、clean/noisy HITL supervision 和 paired audit 解决这个 gap。**
+
+这个方向比继续围绕 0.71→0.74 讨论更有论文潜力。
+
+[1]: https://github.com/AndyWanng/HITL "GitHub - AndyWanng/HITL · GitHub"
+[2]: https://arxiv.org/abs/2309.00350 "[2309.00350] How You Split Matters: Data Leakage and Subject Characteristics Studies in Longitudinal Brain MRI Analysis"
+[3]: https://arxiv.org/abs/1908.08746 "[1908.08746] Automatic Rodent Brain MRI Lesion Segmentation with Fully Convolutional Networks"
+[4]: https://arxiv.org/abs/2310.14230 "[2310.14230] A comprehensive survey on deep active learning in medical image analysis"
+[5]: https://arxiv.org/abs/2409.04368 "[2409.04368] The Impact of Scanner Domain Shift on Deep Learning Performance in Medical Imaging: an Experimental Study"
+[6]: https://arxiv.org/abs/2007.15963 "[2007.15963] Disentangling Human Error from the Ground Truth in Segmentation of Medical Images"
+[7]: https://arxiv.org/abs/2503.12218 "[2503.12218] Adaptive Label Correction for Robust Medical Image Segmentation with Noisy Labels"
+[8]: https://github.com/AndyWanng/HITL/blob/main/src/hemorrhage/protocol/selection.py "HITL/src/hemorrhage/protocol/selection.py at main · AndyWanng/HITL · GitHub"
+[9]: https://github.com/AndyWanng/HITL/blob/main/src/hemorrhage/protocol/rounds.py "HITL/src/hemorrhage/protocol/rounds.py at main · AndyWanng/HITL · GitHub"
