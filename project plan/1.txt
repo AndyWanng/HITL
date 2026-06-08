@@ -1,0 +1,558 @@
+你的理解大体是对的：
+
+> **用现成 EpiBios-refined model 在 ARAMRA 上 predict → 根据模型认为“有价值”的 ARAMRA cases 选择一部分 → 用这些 ARAMRA labels 做 fine-tune → 再用 animal-level OOF 方式 evaluate。**
+
+但这里有一个关键修正：
+
+> **因为这一步暂时没有人工 revise，所以不能简单选“模型最差的 cases”去 fine-tune。**
+> 在原 HITL 里，模型最差的 case 会交给人修，所以高 disagreement 是好事；
+> 但现在如果不人工修，直接用这些 high-disagreement labels 训练，可能会把 label noise / ambiguous cases 学进去，反而伤模型。
+
+所以 case selection 要从原来的 **“review selection”** 改成 **“fine-tuning selection”**。两者目标不一样。
+
+---
+
+# 1. Repo 里的原始 HITL 思想是什么
+
+我重新看了 repo。这个项目原本就是 protocol-first HITL pipeline：训练 5-fold OOF baseline，规划 review round，导入 routine/audit annotation，fine-tune fold-specific models，然后导出 reports 和 external predictions。GitHub README 里明确写了这些功能。([GitHub][1])
+
+原来的 case selection 主要基于三类东西：
+
+1. **model-label disagreement**：当前 label 和 OOF prediction 的差异；
+2. **uncertainty**：TTA / prediction uncertainty；
+3. **review cost**：positive voxel fraction、positive slice fraction、connected components 等。([GitHub][2])
+
+配置里原始权重是 disagreement 0.70、uncertainty 0.30，routine/audit 比例大约 2:1，也有 TTA modes 和 review cost 设置。([GitHub][3])
+
+所以原始 HITL 的核心可以抽象成：
+
+```text
+model prediction + uncertainty
+    → select informative cases
+    → add extra supervision
+    → fine-tune model
+    → evaluate again
+```
+
+现在下一步可以沿用这个思想，但暂时把 “human revised labels” 换成 “selected existing ARAMRA labels”。
+
+---
+
+# 2. 现在下一步最合适的实验问题
+
+建议把下一步问题定义成：
+
+> **Can model-guided selection of a small number of labelled ARAMRA cases improve model performance across both EpiBios and ARAMRA more efficiently than random selection?**
+
+中文就是：
+
+> **模型能不能从 ARAMRA 里挑出最值得用于 fine-tune 的已有 labelled cases，从而比随机选更有效地提升两个数据集上的表现？**
+
+这比“直接在 ARAMRA 上 fine-tune”更有方法意义，也更接近原 HITL pipeline。
+
+---
+
+# 3. 主线实验流程
+
+因为现在没有真正 locked held-out labels，所以主评估建议用 **ARAMRA animal-level OOF / cross-validation**。
+
+整体流程：
+
+```text
+1. ARAMRA 按 animal ID 分 K folds
+2. 每一折留出一组 ARAMRA animals 作为 evaluation fold
+3. 在剩余 ARAMRA animals 中，用 EpiBios-refined model 计算 selection score
+4. 选一部分 ARAMRA animals/cases 用于 fine-tune
+5. 从 EpiBios-refined checkpoint 出发，使用 selected ARAMRA + EpiBios replay fine-tune
+6. 在 held-out ARAMRA animals 上 evaluate
+7. 所有 folds 合并，得到 ARAMRA animal-level OOF result
+8. 同时检查 EpiBios performance 是否保持稳定
+```
+
+最重要的是：**每一折的 held-out ARAMRA animals 不能参与 case selection，也不能参与 fine-tune。**
+
+否则会有 selection leakage。
+
+---
+
+# 4. 用哪个模型挑 ARAMRA cases
+
+这里我建议：
+
+## 主方案：用 EpiBios-refined model 挑 ARAMRA cases
+
+因为导师现在想看 generalisability：
+
+> EpiBios 训练出来的模型，如何通过少量 ARAMRA cases 扩展到 both cohorts。
+
+所以主 selection model 应该是：
+
+```text
+EpiBios R1 / EpiBios-refined model
+```
+
+它在 ARAMRA 上的 prediction 最能回答：
+
+> source model 到 ARAMRA 哪里不适应？哪些 ARAMRA cases 最值得用于 fine-tune？
+
+已有结果里，EpiBios R1 在 source cohort 有提升，但到 ARAMRA 的提升很小，这正好支持做 model-guided ARAMRA fine-tuning。animal-wise R1 在 EpiBios raw macro Dice 从 0.6682 到 0.6975，但在 ARAMRA raw macro Dice 只到 0.5582。
+
+## 辅助方案：ARAMRA animal-level initial model
+
+如果时间允许，可以额外训练一个 ARAMRA animal-level OOF model，用来辅助分析：
+
+```text
+哪些 cases 是 ARAMRA 内部也难？
+哪些只是 EpiBios-to-ARAMRA transfer 难？
+```
+
+但它不应该是第一优先级。否则故事会变成 “ARAMRA 内部 supervised training”，而不是 “EpiBios-to-ARAMRA generalisability”。
+
+所以建议写成：
+
+> First use the EpiBios-refined model for ARAMRA case selection. If time allows, an ARAMRA animal-level OOF model can be added as an auxiliary analysis.
+
+---
+
+# 5. Case selection 不能只选最差的
+
+这是最关键点。
+
+## 原 HITL review selection
+
+原来是：
+
+```text
+high disagreement / high uncertainty
+    → 人工 revise
+```
+
+因为人会修，所以选最难的合理。
+
+## 现在 fine-tuning selection
+
+现在是：
+
+```text
+selected ARAMRA labels
+    → 直接 fine-tune model
+```
+
+如果没有人工修，最难的 case 可能包含：
+
+* label ambiguity；
+* annotation noise；
+* model 完全不适应该图像；
+* 极端小病灶；
+* boundary 很模糊。
+
+直接用这些训练，可能伤模型。
+
+所以 selection 应该是：
+
+> **informative but still reliable**
+> 不只选 worst cases，而是选一个 balanced informative subset。
+
+---
+
+# 6. 我建议的 selection strategies
+
+为了让结果有说服力，你至少要比较 4 种选择方式。
+
+## Strategy 0：Random stratified selection
+
+按 animal 随机选，但保证 D9/M5、lesion size 大致平衡。
+
+用途：
+
+> 判断 model-guided selection 是否真的优于随机。
+
+---
+
+## Strategy 1：Disagreement-only selection
+
+用 EpiBios-refined model prediction 和 ARAMRA current label 的差异来选。
+
+例如：
+
+```text
+low Dice between prediction and label
+large volume difference
+large false-positive / false-negative region
+```
+
+用途：
+
+> 看原 HITL 的 disagreement 思想是否有用。
+
+风险：
+
+> 如果选太极端，可能选到 label-noisy / ambiguous cases。
+
+---
+
+## Strategy 2：Uncertainty-only selection
+
+用模型不确定性选。
+
+如果你有 TTA / ensemble，可以用：
+
+```text
+mean top uncertainty
+high uncertainty voxel fraction
+TTA variance
+```
+
+用途：
+
+> 看 label-free 的 model uncertainty 是否足够。
+
+这更接近 active learning，但可能不如 disagreement 稳。
+
+---
+
+## Strategy 3：Balanced utility selection
+
+这是我推荐的主方法。
+
+它不是简单选最差，而是综合：
+
+```text
+disagreement + uncertainty + cost + diversity + D9/M5 coverage
+```
+
+并且避免只选极端 outliers。
+
+这个最适合现在的 fine-tuning 目标。
+
+---
+
+# 7. 具体 selection score 怎么算
+
+可以沿用 repo 的原始思想。
+
+对每个 ARAMRA case，计算：
+
+## 7.1 Disagreement
+
+[
+D_i = \operatorname{topmean}(|y_i - p_i|)
+]
+
+其中：
+
+* (y_i)：ARAMRA current label；
+* (p_i)：EpiBios-refined model prediction；
+* topmean 可以用 top 1% voxels，和 repo 原逻辑类似。repo 里 selection 就是对 `abs(previous_binary_label - previous_oof)` 取 top voxel mean。([GitHub][2])
+
+## 7.2 Uncertainty
+
+[
+U_i = \operatorname{topmean}(q_i)
+]
+
+其中 (q_i) 是 TTA variance 或 ensemble uncertainty。repo 里 round helper 本身支持从 TTA predictions 计算 mean 和 variance。([GitHub][4])
+
+## 7.3 Cost
+
+用 predicted mask 估计：
+
+[
+C_i = 1 + 2 \cdot positive_fraction + positive_slice_fraction + cc_score
+]
+
+这和 repo 里的 review cost 很接近：base bias、positive voxel、positive slice、connected component 都进入 cost。([GitHub][2])
+
+## 7.4 Base utility
+
+[
+S_i = \frac{0.7 \cdot \bar{D}_i + 0.3 \cdot \bar{U}_i}{1 + \bar{C}_i}
+]
+
+这基本沿用 protocol 里 0.70 disagreement / 0.30 uncertainty 的权重。([GitHub][3])
+
+---
+
+# 8. 但要加一个 fine-tuning safety rule
+
+因为现在不是人工 review，而是直接 fine-tune，所以我建议对 selection 加一个规则：
+
+> **不要只拿 score 最高的 extreme cases。**
+
+具体可以这样做。
+
+## 推荐：Balanced utility selection
+
+先按 utility score 分层：
+
+| Stratum      | 含义                     | 用途                                      |
+| ------------ | ---------------------- | --------------------------------------- |
+| low score    | 模型和 label 比较一致         | representative / stable target examples |
+| middle score | 有一定差异但不极端              | 最适合 fine-tune                           |
+| high score   | 模型非常不稳定或强 disagreement | 信息量高，但可能有 label noise                   |
+
+然后选：
+
+| Type                                          |  比例 |
+| --------------------------------------------- | --: |
+| middle/high utility but not extreme           | 50% |
+| representative low/mid cases                  | 25% |
+| M5 / small-lesion / difficult timepoint cases | 25% |
+
+如果按 animal 选，先把 scan score 聚合到 animal：
+
+[
+S_{animal} = \max(S_{D9}, S_{M5})
+]
+
+或者：
+
+[
+S_{animal} = 0.5S_{D9} + 0.5S_{M5}
+]
+
+如果该动物只有一个 timepoint，就用该 scan 的 score。
+
+---
+
+# 9. 推荐的 selection budgets
+
+不要只跑一个 budget。建议做 budget curve。
+
+按 animal 选：
+
+| Budget                 | 用途                   |
+| ---------------------- | -------------------- |
+| 5 animals              | very low target data |
+| 10 animals             | small target data    |
+| 20 animals             | moderate target data |
+| all adaptation animals | upper bound          |
+
+如果算力有限，先跑：
+
+```text
+10 animals
+20 animals
+all adaptation pool
+```
+
+每个 budget 比较：
+
+```text
+random vs disagreement-only vs balanced utility
+```
+
+这样就能看：
+
+> model-guided selection 是否比 random 更 data-efficient。
+
+---
+
+# 10. Fine-tuning 怎么做
+
+## 10.1 起点
+
+从 EpiBios-refined model 出发。
+
+如果要最强实际 baseline，可以用 old workspace R1；如果要最干净 animal-level source baseline，可以用 animal-wise R1。baseline comparison 里 old workspace R1 在 ARAMRA raw macro Dice 是 0.5732，animal-wise R1 是 0.5582，所以 old workspace R1 是更强的 empirical source-only baseline。
+
+我的建议：
+
+* **主实验**：animal-wise R1，逻辑最干净；
+* **sensitivity / strong baseline**：old workspace R1。
+
+如果时间有限，先用 animal-wise R1，因为它和 animal-level OOF 设计一致。
+
+## 10.2 Fine-tune data
+
+每个 ARAMRA CV fold 中：
+
+```text
+selected ARAMRA animals from training folds
++
+EpiBios replay data
+```
+
+为什么要 EpiBios replay？
+
+因为目标是 both datasets，不只是 ARAMRA。
+如果只用 selected ARAMRA fine-tune，可能提升 ARAMRA 但忘掉 EpiBios。
+
+## 10.3 Loss
+
+第一版不要复杂化。
+
+用标准：
+
+```text
+Dice loss + BCE
+```
+
+或者保持 repo 当前训练 loss。
+
+如果后面需要，再加：
+
+* EpiBios/ARAMRA sampling balance；
+* EpiBios reviewed labels higher weight；
+* ARAMRA high-disagreement cases lower weight；
+* M5 oversampling。
+
+但第一批实验先不要上这些，否则很难解释 selection 本身有没有用。
+
+---
+
+# 11. Evaluation 怎么做
+
+因为没有 locked held-out labels，用：
+
+> **animal-level OOF evaluation**
+
+每个 fold：
+
+```text
+held-out ARAMRA animals
+    = evaluation only
+training ARAMRA animals
+    = selection + fine-tune pool
+```
+
+最终 aggregate 所有 folds 的 predictions。
+
+Metrics：
+
+* Dice；
+* HD95；
+* ASSD；
+* D9 / M5 split；
+* EpiBios retention。
+
+当前 repo 训练/报告机制本来支持 round reports、OOF predictions、masks、summary metrics 等输出。operations guide 也说明 round0 训练会生成 OOF predictions、soft targets、uncertainty maps，finalize 后会 fine-tune、重新生成 OOF、reports 和 masks。([GitHub][5])
+
+---
+
+# 12. 最小可跑版本
+
+如果你现在要尽快开始，我建议先跑最小版。
+
+## Minimal experiment
+
+```text
+ARAMRA 5-fold animal-level CV
+
+For each fold:
+    eval fold = held-out ARAMRA animals
+    train pool = remaining ARAMRA animals
+
+    Use EpiBios R1 model to predict train pool
+    Compute disagreement score
+    Select:
+        random 10 animals
+        disagreement 10 animals
+        balanced utility 10 animals
+
+    Fine-tune EpiBios R1 model with:
+        selected ARAMRA animals + EpiBios replay
+
+    Evaluate on held-out ARAMRA fold
+Aggregate all folds
+```
+
+如果算力允许，再加 20 animals budget：
+
+```text
+random 20
+disagreement 20
+balanced utility 20
+```
+
+再加 all adaptation pool upper bound。
+
+---
+
+# 13. 最重要的实验表
+
+最后你应该得到这张表：
+
+| Method                 | ARAMRA selection  |     Budget | ARAMRA Dice | ARAMRA HD95 | ARAMRA ASSD | D9 Dice | M5 Dice | EpiBios Dice |
+| ---------------------- | ----------------- | ---------: | ----------: | ----------: | ----------: | ------: | ------: | -----------: |
+| Source-only            | none              |          0 |             |             |             |         |         |              |
+| Random                 | random            | 10 animals |             |             |             |         |         |              |
+| Disagreement           | high disagreement | 10 animals |             |             |             |         |         |              |
+| Balanced utility       | proposed          | 10 animals |             |             |             |         |         |              |
+| Random                 | random            | 20 animals |             |             |             |         |         |              |
+| Balanced utility       | proposed          | 20 animals |             |             |             |         |         |              |
+| All ARAMRA train folds | all               |        all |             |             |             |         |         |              |
+
+这张表直接回答：
+
+> 选模型认为有价值的 ARAMRA cases 是否比随机更好？
+> 提升 ARAMRA 的同时是否保持 EpiBios？
+> D9/M5 哪个受益？
+
+---
+
+# 14. 结果怎么解释
+
+你可以提前准备几种可能。
+
+## 情况 A：Balanced utility > Random
+
+这是最好结果。
+
+说明：
+
+> model-guided selection is useful for target-cohort fine-tuning.
+
+这个最接近 HITL 的 extension。
+
+## 情况 B：Random ≈ Balanced utility
+
+说明：
+
+> ARAMRA target data 本身有用，但当前 selection score 没带来明显优势。
+
+下一步可以改 selection 或加 human review。
+
+## 情况 C：Disagreement-only 很差
+
+这其实也有价值。
+
+说明：
+
+> without human revision, the hardest disagreement cases may not be safe for direct fine-tuning.
+
+这能支持你后面说为什么真正 HITL review 仍然有必要。
+
+## 情况 D：ARAMRA 提升但 EpiBios 掉很多
+
+说明：
+
+> 需要 EpiBios replay / source retention loss / balanced training。
+
+---
+
+# 15. 给导师的高层说法
+
+可以这样说：
+
+> My next experiment will keep the model-guided selection idea from the original HITL pipeline, but use it first for ARAMRA fine-tuning rather than asking for additional manual revision. The EpiBios-refined model will be applied to ARAMRA, informative ARAMRA animals will be selected from the training folds, and the model will be fine-tuned with those selected labelled cases plus EpiBios replay data. Since we do not have a separate locked ARAMRA test set, I will evaluate this using animal-level cross-validation, keeping evaluation animals separate from selection and fine-tuning in each fold.
+
+这个说法非常清楚。
+
+---
+
+# 16. 一句话总结
+
+下一步最合适的实验是：
+
+> **用 EpiBios-refined model 在 ARAMRA training folds 上做 model-guided case selection；选出的 labelled ARAMRA animals 与 EpiBios replay 一起 fine-tune；用 ARAMRA animal-level OOF evaluate；比较 random、disagreement、uncertainty、balanced utility selection；同时检查 EpiBios performance retention。**
+
+最关键的设计原则是：
+
+> **选 case 时只能看 training folds，evaluation fold 完全隔离；且 fine-tuning selection 不应只选最差 cases，而应选 informative + reliable + D9/M5 balanced subset。**
+
+[1]: https://github.com/AndyWanng/HITL "GitHub - AndyWanng/HITL · GitHub"
+[2]: https://raw.githubusercontent.com/AndyWanng/HITL/main/src/hemorrhage/protocol/selection.py "raw.githubusercontent.com"
+[3]: https://raw.githubusercontent.com/AndyWanng/HITL/main/configs/protocol.yaml "raw.githubusercontent.com"
+[4]: https://raw.githubusercontent.com/AndyWanng/HITL/main/src/hemorrhage/protocol/rounds.py "raw.githubusercontent.com"
+[5]: https://raw.githubusercontent.com/AndyWanng/HITL/main/docs/GUIDE.md "raw.githubusercontent.com"

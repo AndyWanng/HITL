@@ -39,6 +39,7 @@ Thumbs.db
 /analysis/workspace_v0_full_external_analysis/results/
 /analysis/workspace_v0_full_external_analysis/status/
 /analysis_attempt3_diagnostics/
+/next/runs/
 
 # Medical-imaging data, predictions, probabilities, and checkpoints
 *.nii

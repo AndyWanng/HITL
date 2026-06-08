@@ -1,0 +1,80 @@
+experiment_name: next_aramra_selection_oof
+seed: 20260607
+
+paths:
+  source_workspace: workspace
+  epibios_data_root: data
+  aramra_root: /fs04/ea78/BraTS2021/hemorrhage_hitl/ARAMRA002_standardized
+  run_root: next/runs
+
+limits:
+  epibios_animals: null
+  aramra_cases: null
+
+split:
+  source_folds: 5
+  aramra_folds: 5
+
+selection:
+  source_round: 1
+  top_voxel_fraction: 0.01
+  top_voxel_min: 100
+  disagreement_weight: 0.70
+  uncertainty_weight: 0.30
+  positive_voxel_cost_weight: 2.0
+  positive_slice_cost_weight: 1.0
+  connected_component_cost_weight: 1.0
+  max_connected_components: 20
+  methods: [random, disagreement, uncertainty, balanced_utility]
+  budgets_animals: [10, 20]
+  run_all_train_pool: true
+
+model:
+  in_channels: 1
+  out_channels: 1
+  stage_channels: [32, 64, 96, 160, 256, 320]
+  dropout_bottleneck: 0.1
+
+training:
+  device: auto
+  amp: true
+  batch_size: 2
+  num_workers: 0
+  patch_size: [128, 96, 64]
+  patches_per_case: 2
+  positive_patch_probability: 0.5
+  epibios_replay_mode: source_fold_train_only
+  epibios_case_weight: 1.0
+  aramra_case_weight: 1.0
+  validation:
+    enabled: false
+    fraction: 0.125
+    min_cases: 1
+  adaptation:
+    epochs: 50
+    lr: 5.0e-6
+    weight_decay: 1.0e-4
+  aux_aramra:
+    epochs: 100
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+
+inference:
+  patch_size: [128, 96, 64]
+  overlap: 0.5
+  threshold: 0.5
+  tta_modes: [identity, flip_x]
+  postprocess_min_component_voxels: [2, 16]
+
+stages:
+  source_prediction_scoring: true
+  run_main_experiments: true
+  eval_epibios_retention: true
+  run_aux_aramra_internal_oof: true
+
+outputs:
+  save_source_fold_probabilities: false
+  save_source_masks: true
+  save_masks: true
+  save_retention_masks: false
+  log_every_cases: 10
